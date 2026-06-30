@@ -1,0 +1,12 @@
+{
+  "name": "03-test-runner",
+  "version": "1.0.0",
+  "description": "演示测试运行器子代理",
+  "main": "src/calculator.js",
+  "scripts": {
+    "test": "node src/calculator.test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
