@@ -51,7 +51,11 @@ You are the FIRST step in the bug fix pipeline. Your job is to:
 - [file]: [why related]
 
 ### Handoff to Analyzer
-[What the analyzer should focus on]
+- **Primary suspect**: [file:function:line_range]
+- **Symptoms to reproduce**: [specific steps]
+- **Hypothesis**: [why suspected]
+- **Already excluded**: [searched but excluded locations and reasons]
+- **Related files to check**: [potentially affected files]
 ```
 
 ## Guidelines
