@@ -1,6 +1,6 @@
 ---
 name: build-log-analyzer
-description: Analyze webpack, Vite, Rollup, esbuild, TypeScript, ESLint, CSS, and package-manager build output. Use when a build fails, emits excessive warnings, or needs root-cause analysis from noisy terminal logs.
+description: Proactively analyze frontend build output after failed or noisy builds. Use this after webpack, Vite, Rollup, esbuild, TypeScript, ESLint, CSS, or package-manager build commands fail, emit excessive warnings, or produce long terminal logs that need root-cause extraction.
 tools: Read, Grep, Glob, Bash
 permissionMode: plan
 model: sonnet
