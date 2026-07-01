@@ -1,0 +1,15 @@
+{
+  "name": "07-bugfix-pipeline",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "node test/services.test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

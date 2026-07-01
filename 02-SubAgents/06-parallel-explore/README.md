@@ -1,3 +1,8 @@
+使用并行探索：同时让 auth-explorer、db-explorer、api-explorer 探索各自模块， 然后汇总给我一个整体架构理解
+
+
+
+
 # auth-explorer 说明
 
 ### 1. 元数据与工具约束 (Metadata & Tools)
