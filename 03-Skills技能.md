@@ -1,6 +1,12 @@
 # Skills 技能
 
+
+
+
 ## SKILL.md 结构与触发机制
+
+
+
 
 ### 什么是 Skills
 
@@ -416,9 +422,9 @@ Skills 重点：
 
 
 
-什么时候用参考型Skill，什么时候用任务型Skill？什么时候必须手动触发？
+什么时候用参考型 Skill，什么时候用任务型 Skill？什么时候必须手动触发？
 
 ![](./imgs/img67.png)
 
-简而言之，CLAUDE.md 放“Claude 每次都该知道的少量规则”（< 100 行）；Skill 放“特定场景下的详细指令和知识”（可以很长，按需加载）。**如果犹豫放 CLAUDE.md 还是 Skill，那么就放 Skill，并在 CLAUDE.md 里加一行引用**。
+简而言之，CLAUDE.md 放`Claude 每次都该知道的少量规则（< 100 行）`；Skill 放`特定场景下的详细指令和知识”（可以很长，按需加载）`。**如果犹豫放 CLAUDE.md 还是 Skill，那么就放 Skill，并在 CLAUDE.md 里加一行引用**。
 
