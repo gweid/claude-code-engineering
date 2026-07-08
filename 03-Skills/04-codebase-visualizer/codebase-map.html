@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>04-codebase-visualizer - Codebase Map</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace; background: #0d1117; color: #c9d1d9; padding: 20px; }
+h1 { color: #58a6ff; font-size: 1.4em; margin-bottom: 8px; }
+.stats { color: #8b949e; font-size: 0.85em; margin-bottom: 16px; }
+.stats span { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 2px 10px; margin-right: 6px; display: inline-block; margin-bottom: 4px; }
+.tree { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; overflow-x: auto; }
+.tree ul { list-style: none; padding-left: 20px; }
+.tree > ul { padding-left: 0; }
+.tree li { line-height: 1.8; white-space: nowrap; }
+.tree li.dir > .label { cursor: pointer; user-select: none; }
+.tree li.dir > .label:hover { color: #58a6ff; }
+.tree li.dir > .label::before { content: '\25BE '; color: #8b949e; display: inline-block; width: 16px; transition: transform 0.15s; }
+.tree li.dir.collapsed > .label::before { content: '\25B8 '; }
+.tree li.dir.collapsed > ul { display: none; }
+.tree li.file .label { color: #c9d1d9; }
+.tree li.file .label::before { content: '  '; display: inline-block; width: 16px; }
+.icon { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+.path { color: #484f58; font-size: 0.75em; margin-left: 8px; }
+.size { color: #484f58; font-size: 0.75em; margin-left: 6px; }
+.bar-chart { margin-top: 16px; background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+.bar-chart h3 { color: #58a6ff; font-size: 1em; margin-bottom: 12px; }
+.bar { display: flex; align-items: center; margin-bottom: 4px; }
+.bar-label { width: 60px; text-align: right; font-size: 0.8em; color: #8b949e; padding-right: 8px; }
+.bar-fill { height: 16px; border-radius: 3px; min-width: 2px; transition: width 0.3s; }
+.bar-count { font-size: 0.8em; color: #8b949e; padding-left: 6px; }
+.controls { margin-bottom: 12px; }
+.controls button { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; padding: 4px 12px; cursor: pointer; font-size: 0.8em; margin-right: 4px; }
+.controls button:hover { background: #30363d; }
+</style>
+</head>
+<body>
+<h1>04-codebase-visualizer</h1>
+<div class="stats">
+    <span>1 files</span>
+    <span>1 types</span>
+</div>
+<div class="controls">
+    <button onclick="expandAll()">Expand All</button>
+    <button onclick="collapseAll()">Collapse All</button>
+    <button onclick="collapseDepth(1)">Depth 1</button>
+    <button onclick="collapseDepth(2)">Depth 2</button>
+</div>
+<div class="tree" id="tree"></div>
+<div class="bar-chart" id="chart"></div>
+
+<script>
+const TREE = {"name": "04-codebase-visualizer", "type": "directory", "children": [{"name": "README.md", "type": "file", "ext": ".md", "size": 58, "path": "README.md"}], "path": "."};
+const STATS = {".md": 1};
+const COLORS = {".py": "#3572A5", ".js": "#F7DF1E", ".ts": "#3178C6", ".tsx": "#3178C6", ".jsx": "#F7DF1E", ".html": "#E34F26", ".css": "#1572B6", ".json": "#292929", ".md": "#083FA1", ".yaml": "#CB171E", ".yml": "#CB171E", ".sh": "#89E051", ".go": "#00ADD8", ".rs": "#DEA584", ".java": "#B07219", ".rb": "#CC342D", ".php": "#4F5D95", ".sql": "#E38C00", ".toml": "#9C4121"};
+
+function getColor(ext) { return COLORS[ext] || '#8b949e'; }
+
+function formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function buildTree(node, depth) {
+    if (node.type === 'file') {
+        const color = getColor(node.ext);
+        return '<li class="file"><span class="label">'
+            + '<span class="icon" style="background:' + color + '"></span>'
+            + node.name
+            + '<span class="size">' + formatSize(node.size) + '</span>'
+            + '</span></li>';
+    }
+    const collapsed = depth > 1 ? ' collapsed' : '';
+    let html = '<li class="dir' + collapsed + '">'
+        + '<span class="label" onclick="toggleDir(this)">' + node.name + '/</span>';
+    if (node.children && node.children.length > 0) {
+        html += '<ul>';
+        for (const child of node.children) {
+            html += buildTree(child, depth + 1);
+        }
+        html += '</ul>';
+    }
+    html += '</li>';
+    return html;
+}
+
+function toggleDir(el) {
+    el.parentElement.classList.toggle('collapsed');
+}
+
+function expandAll() {
+    document.querySelectorAll('.tree .dir').forEach(el => el.classList.remove('collapsed'));
+}
+
+function collapseAll() {
+    document.querySelectorAll('.tree .dir').forEach(el => el.classList.add('collapsed'));
+}
+
+function collapseDepth(maxDepth) {
+    function setDepth(el, depth) {
+        if (!el.classList.contains('dir')) return;
+        if (depth >= maxDepth) {
+            el.classList.add('collapsed');
+        } else {
+            el.classList.remove('collapsed');
+        }
+        el.querySelectorAll(':scope > ul > .dir').forEach(child => setDepth(child, depth + 1));
+    }
+    document.querySelectorAll('.tree > ul > .dir').forEach(el => setDepth(el, 0));
+}
+
+function buildChart() {
+    const entries = Object.entries(STATS);
+    if (entries.length === 0) return;
+    const maxCount = Math.max(...entries.map(e => e[1]));
+    let html = '<h3>File Types</h3>';
+    for (const [ext, count] of entries) {
+        const pct = (count / maxCount * 100).toFixed(0);
+        const color = getColor(ext);
+        html += '<div class="bar">'
+            + '<span class="bar-label">' + (ext || '(none)') + '</span>'
+            + '<span class="bar-fill" style="width:' + pct + '%;background:' + color + '"></span>'
+            + '<span class="bar-count">' + count + '</span>'
+            + '</div>';
+    }
+    document.getElementById('chart').innerHTML = html;
+}
+
+document.getElementById('tree').innerHTML = '<ul>' + buildTree(TREE, 0) + '</ul>';
+buildChart();
+</script>
+</body>
+</html>

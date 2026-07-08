@@ -732,6 +732,12 @@ Skill 中常用 Hook 模式如下：
 
 ![](./imgs/img71.png)
 
+- PreToolUse：工具执行前触发
+- PostToolUse：工具成功执行后触发
+- Stop：Claude 正常完成一轮回复时触发
+
+还有其他的 Hook 执行时机，但上面三个最常用
+
 
 
 Skill Hooks与全局 Hooks 的区别如下：
@@ -814,6 +820,597 @@ Skill Hooks与全局 Hooks 的区别如下：
 
 - **七步设计清单** ：动作 → 触发 → 权限 → 上下文 → 安全网 → 隔离 → 模型。尤其要强调的原则是**权限最小化原则，**`allowed-tools` 应该精确到命令级，不要随便用 `Bash(*)`
 - **Skill 的价值在于积累**。团队标准化流程就是把最佳实践固化为 Skill
+
+
+
+## 渐进式披露架构设计
+
+在真实场景中，专业能力往往很复杂，比如一个财务分析 Skill，它需要包含财务指标计算公式、不同行业的基准数据、各种报表模板、分析脚本以及案例示例
+
+如果把这些全部塞进一个 SKILL.md，会有两个问题：
+
+- **Token 爆炸**：每次激活都要加载几千 tokens
+
+- **信息噪声**：用户问“收入增长率怎么算”，Claude 却要阅读关于成本分析、现金流、资产负债表的全部内容
+
+
+
+**渐进式披露（Progressive Disclosure** ，即渐进式的加载**）** 就是解决这个问题的架构模式。但渐进式披露的意义远不止节省 token。从企业本体论的视角看，它是**知识管理（Knowledge Management）在 AI 架构中的技术映射**。如何让正确的知识在正确的时刻到达正确的执行者手中
+
+
+
+### 渐进式披露的设计哲学
+
+用图书馆来类比渐进式披露的设计哲学：走进一个图书馆找资料时，不会一次把所有书都读一遍。而是先看目录找到相关分类，再选一本具体的书，最后翻到需要的章节深入阅读。信息是逐层展开的，而不是一次性全部载入大脑
+
+
+
+Skill 的渐进式披露设计也是一样：
+
+- 第一层只扫描 description 作为“目录”
+- 第二层在触发时加载 SKILL.md 主文件作为“章节”，
+- 第三层再按需加载被引用的具体文件作为“附录”。
+
+结构化分层替代信息堆叠，让系统在规模变大时依然高效、可控
+
+![](./imgs/img74.png)
+
+
+
+### 上下文窗口是稀缺资源
+
+**上下文窗口是 LLM 的“工作记忆”。** 人类的工作记忆大约能同时处理 7±2 个信息块（Miller’s Law）。LLM 的上下文窗口虽然大得多（最新的到 1M），但也是**有限的稀缺资源** ，而且有一个更严重的问题：**注意力稀释效应**
+
+
+
+注意力稀释效应：是指上下文越长，LLM 对每个信息片段的关注度越低。一个 5000 token 的上下文中的关鍵指令，比一个 50000 token 上下文中的同样指令，会被更准确地执行。
+
+
+
+**渐进式披露的本质**：以最小的 token 投入获得最高的任务完成质量——这就是知识的**投资回报率（Knowledge ROI）**
+
+![](./imgs/img75.png)
+
+
+
+### Skill 的三层渐进式架构详解
+
+例子：财务分析 Skill。当用户提出与收入、成本、利润、增长率、毛利率、ROE/ROA 或整体财务表现相关的问题时，会被激活，先在主文件中完成问题识别和分析路径判断，再按需加载对应的公式说明、行业基准数据或报告模板，必要时调用脚本进行确定性计算，最后输出结构清晰、口径一致的分析结果
+
+
+
+Skill 的三层渐进式的架构设计：
+
+**层级 1：目录页（Entry Point）**
+
+这是 Skills 系统扫描阶段读取的内容——**只有 description**
+
+```yaml
+---
+name: financial-analyzing
+description: Analyze financial data, calculate ratios, and generate reports. Use when the user asks about revenue, costs, profits, margins, financial metrics, or needs financial analysis.
+---
+```
+
+目录页的设计原则是，description 足够丰富，让 Claude 能准确判断相关性。但不要太长，因为**所有 Skill 的 description 共享 15,000 字符的总预算** 。如果 Skill 数量多导致 description 被截断，可以通过 `SLASH_COMMAND_TOOL_CHAR_BUDGET` 环境变量调整
+
+
+
+> ！注意：
+>
+> description 的预算机制决定了一个项目不应有过多的 Skill。如果一个项目需要 20+个 Skil，应该考虑是否有些可以合井，或者用子目录分层
+>
+> description 是一种 token 投资。每多一个字符的 description，就多占一个字符的常驻上下文
+
+
+
+**层级 2：章节（Main Content）**
+
+章节指的是 SKILL.md 的正文部分——**激活后才加载** 
+
+```markdown
+# Financial Analysis Skill
+
+## Quick Start
+基础的财务分析流程...
+
+## Available Analyses
+
+### Revenue Analysis
+For detailed formulas, see `reference/revenue.md`
+
+### Cost Analysis
+For detailed formulas, see `reference/costs.md`
+
+### Profitability Analysis
+For detailed formulas, see `reference/profitability.md`
+
+## When to Load Additional Resources
+- 需要具体公式 → 加载对应的 reference/*.md
+- 需要行业基准 → 加载 data/benchmarks.json
+- 需要报告模板 → 加载 templates/*.md
+```
+
+这一部分的设计原则是主文件提供“路线图”，通过文件引用指向详细内容，然后Claude 根据用户请求决定加载哪些具体内容
+
+
+
+**层级 3：附录（On-Demand Resources）**
+
+只有当 SKILL.md 中引用了这些文件，Claude 才会去读取这一类文件
+
+```yaml
+.claude/skills/financial-analyzing/    # 标准 Skill 目录
+├── SKILL.md                           # 主文件（总是加载）
+├── reference/                         # 参考资料
+│   ├── revenue.md                     # 收入分析公式
+│   ├── costs.md                       # 成本分析公式
+│   └── profitability.md               # 盈利分析公式
+├── templates/                         # 报告模板
+│   ├── quarterly_report.md
+│   └── annual_report.md
+├── data/                              # 数据文件
+│   └── industry_benchmarks.json
+└── scripts/                           # 分析脚本
+    ├── calculate_ratios.py
+    └── generate_report.sh
+```
+
+这一部分内容的设计原则是文件名要有描述性（`revenue.md` 而非 `ref1.md`）。Claude 根据文件名判断是否需要加载
+
+所有辅助文件都在 Skill 自己的目录内，随 Skill 一起分发。相关内容放在一起，并按功能域组织子目录。例如脚本有自己独立存放的目录（scripts），Claude 可以执行它，但不需要去“理解”（这样也就节省了Token）
+
+
+
+### 财务分析 Skill：项目设计细节
+
+财务分析 Skill 结构如下：
+
+> 在 03-Skills/03-financial-skill 下
+
+```yaml
+.claude/skills/financial-analyzing/
+├── reference/
+│   ├── revenue.md                   # 收入分析
+│   ├── costs.md                     # 成本分析
+│   └── profitability.md             # 盈利分析
+├── templates/
+│   └── analysis_report.md           # 分析报告模板
+├── scripts/
+│   └── calculate_ratios.py          # 比率计算脚本
+└── SKILL.md                         # 主 Skill 文件
+```
+
+
+
+主文件 SKILL.md 设计如下：
+
+````markdown
+---
+name: financial-analyzing
+description: Analyze financial data, calculate financial ratios, and generate analysis reports. Use when the user asks about revenue, costs, profits, margins, ROI, financial metrics, or needs financial analysis of a company or project.
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash(python:*)
+---
+
+# Financial Analysis Skill
+
+You are a financial analyst. Help users analyze financial data, calculate key metrics, and generate insightful reports.
+
+## Quick Reference
+
+| Analysis Type | When to Use | Reference |
+|--------------|-------------|-----------|
+| Revenue Analysis | 收入、营收、销售额相关 | `reference/revenue.md` |
+| Cost Analysis | 成本、费用、支出相关 | `reference/costs.md` |
+| Profitability | 利润、毛利率、净利率相关 | `reference/profitability.md` |
+
+## Analysis Process
+
+### Step 1: Understand the Question
+- What financial aspect is the user asking about?
+- What data do they have available?
+- What format do they need the answer in?
+
+### Step 2: Gather Data
+- Request necessary financial data from user
+- Or read from provided files/sources
+
+### Step 3: Calculate Metrics
+For specific formulas and calculations:
+- Revenue metrics → see `reference/revenue.md`
+- Cost metrics → see `reference/costs.md`
+- Profitability metrics → see `reference/profitability.md`
+
+To run calculations programmatically:
+```bash
+python scripts/calculate_ratios.py <data_file>
+```
+
+### Step 4: Generate Report
+Use the template in `templates/analysis_report.md` for structured output.
+
+## Output Guidelines
+
+1. Always show your calculations
+2. Explain what each metric means
+3. Provide context (industry benchmarks when available)
+4. Give actionable recommendations
+
+## Important Notes
+
+- Never make up financial data
+- Ask for clarification if data is incomplete
+- Flag any unusual numbers that might be errors
+````
+
+
+
+这个 Skill 包括一个 Quick Reference 表格，让 Claude 快速定位需要哪个参考文件。使用相对路径指向资源，进行清晰的文件引用，并通过脚本调用说明告诉 Claude 如何使用计算脚本。同时只允许 Read、Grep、Glob 和特定的 Bash 命令
+
+
+
+上面的 SKILL.md 设计，本质上是一个**路由器**，根据用户请求的类型，将 Claude 导向不同的资源文件：
+
+```yaml
+用户请求 → SKILL.md（路由判断）  →  目标资源
+                │
+                ├─ "收入相关"  →  reference/revenue.md
+                ├─ "成本相关"  →  reference/costs.md
+                ├─ "利润相关"  →  reference/profitability.md
+                ├─ "要报告"    →  templates/analysis_report.md
+                └─ "要计算"    →  scripts/calculate_ratios.
+```
+
+这个路由的**关键设计技巧** 是 Quick Reference 表格。用最少的 token（3 行表格 ≈ 50 tokens）告诉 Claude 五个方向的路由。如果没有这个表格，Claude 需要阅读整个 SKILL.md 的 Step 3 才能知道“收入问题去找 revenue.md”。这就是**信息密度** 的差异
+
+
+
+好的路由表格应该：
+
+- 用“用户可能说的关键词”作为路由条件（而非“文件内容的技术名称”）
+- 每个路由条目一行，不要超过 10 个条目（超过就需要分层）
+- 高频路由放前面
+
+
+
+上面的财务分析 skill，具体例子的执行过程：
+
+```yaml
+问题一：毛利率怎么计算？
+
+1.扫描 Skills → 发现 financial-analyzing 匹配
+2.加载 SKILL.md → 看到 “Profitability → see reference/profitability.md”
+3.加载 reference/profitability.md → 找到毛利率公式
+4.回答用户
+
+
+
+
+
+问题二：帮我分析 data 目录中的财务数据，生成一份完整的分析报告，放到当前目录跟目录下
+
+Claude 加载过程：
+
+1. 扫描 Skills，发现 financial-analyzing 匹配
+2. 加载 SKILL.md
+3. 分析任务需要，加载所有 reference/*.md
+4. 需要报告格式，加载 templates/analysis_report.md
+5. 需要计算 ，执行 scripts/calculate_ratios.py
+```
+
+场景对比：
+
+![](./imgs/img76.png)
+
+渐进式披露的价值：大部分请求只需要部分资源，平均节省 50-80% tokens
+
+
+
+### 渐进式的设计模式与最佳实践
+
+#### 文件组织模式
+
+首先是**文件组织模式** ，有两种模式：
+
+- 按功能分类
+- 按使用频率分类
+
+如果 Skill 有多种类型的资源（知识+模板+脚本），用功能分类；如果只有不同深度的知识文档，用频率分类
+
+
+
+按功能分类（更推荐）：
+
+```yaml
+.claude/skills/my-skill/
+├── SKILL.md           # 入口 + 路由（< 500 行）
+├── reference/         # 知识库（公式、规范、基准）
+├── templates/         # 输出模板（报告、代码骨架）
+├── examples/          # 示例集（输入输出样本）
+├── scripts/           # 可执行脚本（计算、生成、验证）
+└── data/              # 静态数据（JSON、CSV
+```
+
+
+
+按使用频率分类（适合知识型 Skill）：
+
+```yaml
+.claude/skills/my-skill/
+├── SKILL.md           # 核心内容（高频，总是加载）
+├── QUICKREF.md        # 快速参考（高频，常被加载）
+├── DETAILED.md        # 详细说明（中频，按需加载）
+└── ADVANCED.md        # 高级用法（低频，很少加载）
+```
+
+
+
+#### 主文件设计原则
+
+然后是**主文件设计原则** 。主文件应该控制在 **500 行以内**（官方建议：Keep SKILL.md under 500 lines. Move detailed reference material to separate files.）
+
+应该提供路线图，用 Quick Reference 表格做个快速路由，而非让 Claude 逐行扫描
+
+
+
+什么内容放主文件，什么内容放引用文件？答案是**高频内容内联，低频内容外链。** 最常用的信息直接放在主文件（80/20 法则——80% 请求只需 20% 内容）；偶尔用到的详细信息放在引用文件，用**契约式引用**
+
+
+
+什么是**契约式引用**？
+
+SKILL.md 引用辅助文件时，不要只写一个路径，要写一个**契约** ，让 Claude 知道什么时候该加载、加载后能得到什么
+
+```markdown
+# ❌ 弱引用（Claude 不知道何时该加载）
+See `reference/revenue.md` for more details.
+
+
+
+# ✅ 契约式引用（Claude 清楚加载条件和预期内容）
+## Revenue Analysis
+When the user asks about revenue growth, ARPU, or revenue composition:
+→ Load `reference/revenue.md` for calculation formulas and industry benchmarks
+```
+
+
+
+契约式引用三要素包括：
+
+- **触发条件** ：什么情况下应该加载（“当用户问到 X 时”）
+
+- **文件路径** ：去哪里找
+
+- **内容预期** ：加载后能得到什么（“计算公式和行业基准”）
+
+
+
+引用文件命名要清晰，切忌模糊，重复
+
+```markdown
+# 好的命名
+reference/revenue.md           # 清晰表明内容
+reference/profitability.md     # 清晰表明内容
+templates/quarterly_report.md  # 清晰表明用途
+
+
+# 差的命名
+reference/ref1.md              # 不知道是什么
+docs/misc.md                   # 太模糊
+file.md                        # 毫无信息
+```
+
+
+
+#### 脚本
+
+脚本适合封装**复杂但确定性的逻辑** 。脚本的好处是 Claude Code可以直接执行它，而不需要“理解”"每一行代码，因此可以减少 Token 消耗（不需要把逻辑放在 prompt 中），便于测试和维护（独立的代码文件）
+
+```markdown
+# 适合脚本
+- 财务比率计算（公式固定）
+- 数据格式转换（规则明确）
+- 文件批量处理（重复性高）
+
+
+# 不适合脚本
+- 开放性分析（需要判断）
+- 创意性任务（需要灵活性）
+- 交互式决策（需要反馈）
+```
+
+
+
+脚本不仅能做计算，还能**生成可视化结果** 。Claude 官方提供了一种强大的模式：Skill 中的脚本生成交互式 HTML 文件，在浏览器中打开
+
+
+
+代码库可视化 Skill 的示例：
+
+```yaml
+.claude/skills/codebase-visualizer/
+├── SKILL.md                    # 指令：调用 visualize.py
+└── scripts/
+    └── visualize.py            # 生成交互式目录树 HTML
+```
+
+
+
+SKILL.md 只需要告诉 Claude 运行脚本：
+
+```markdown
+---
+name: codebase-visualizer
+description: Generate an interactive tree visualization of your codebase. Use when exploring a new repo or understanding project structure.
+allowed-tools: Bash(python *)
+---
+
+Run the visualization script from your project root:
+
+\```bash
+python ~/.claude/skills/codebase-visualizer/scripts/visualize.py .
+\```
+
+This creates `codebase-map.html` and opens it in your default browser.
+```
+
+
+
+流程：用户请求 → Skill 激活 → Claude 执行脚本 → 生成 HTML → 浏览器打开
+
+**这体现了渐进式披露的极致。Claude 只需要知道“运行什么命令”（10 tokens），而非“如何生成 HTML”（2000+ tokens）**
+
+
+
+### 内容拆分工程方法论
+
+一个根本问题：面对一坨知识，怎么决定什么放 SKILL.md、什么放引用文件、什么放脚本？
+
+
+
+知识拆分决策树：
+
+![](./imgs/img77.png)
+
+这棵决策树背后真正体现的，是：**核心语义内联，确定逻辑外包，结构独立，数据延迟，示例分离** 等大原则
+
+
+
+官方建议 SKILL.md 控制在 **500 行以内**，超过 500 行时的重构信号和对策如下：
+
+![](./imgs/img78.png)
+
+
+
+拆分决策树和目录结构不是随意设计的。它们映射到**企业知识管理的经典范式**：
+
+![](./imgs/img79.png)
+
+1. **SKILL.md = 部门 SOP 首页** 。好的 SOP 首页不会把所有操作细节都列出来。它提供概览和导航，让使用者快速找到需要的章节。SKILL.md 的 Quick Reference 表格就是这个导航
+2. **reference/ = 知识库** 。企业知识库的特点是内容丰富但使用频率低，按需查阅而非每次通读。Skill 的 reference 文件同理。只有 Claude 判断需要时才加载
+3. **templates/ = 标准化输出** 。企业用模板确保报告、邮件、文档的格式一致。Skill 的模板同理。Claude 不需要每次都“创造”一个报告格式
+4. **scripts/ = 自动化工具** 。企业用脚本和工具自动化重复性操作。这里的关键洞察是，**脚本把“知识”变成了“行动“** 。它是 Skills（知识层）和 Tools（行动层）的桥梁
+
+
+
+这引出了一个重要话题：Skills 和 Tools 到底是什么关系？它们如何协作？下面继续探讨
+
+
+
+### Skills 与 Tools 的本质关系
+
+#### 第一层关系：Skills 约束 Tools
+
+Skills 通过 allowed-tools 约束 Tools **，**实现 **最小权限原则**
+
+```yaml
+allowed-tools:
+  - Read          # 允许读取
+  - Grep          # 允许搜索
+  - Glob          # 允许查找
+  # 没有 Write、Edit、Bash → 不允许修改
+```
+
+这不是简单的权限控制。这是**知识约束行动** 的范式。一个代码审查 Skill “知道”审查只需要看代码不需要改代码，所以它只给 Claude 只读工具。一个文档生成 Skill “知道”需要创建新文件但不应修改旧文件，所以它给 Write 但不给 Edit。
+
+
+
+#### 第二层关系：Skills 编排 Tools
+
+Skill 中的 `scripts/` 目录存放的脚本，本质上是**预编译的 Tool 调用序列**
+
+```markdown
+# scripts/calculate_ratios.py
+# 这个脚本 = Read(data_file) + 计算逻辑 + Print(results)
+# Claude 不需要理解计算逻辑，只需要：
+#   1. Bash("python scripts/calculate_ratios.py data.json")
+#   2. 读取输出结果
+```
+
+
+
+没有脚本时，Claude 需要自己组合多个 Tool 调用来完成任务：
+
+手动编排（没有脚本）：
+1. Read(data.json) → 获取数据
+2. Claude 内部计算 → 消耗推理 token
+3. 可能出错 → 需要多轮修正
+
+
+
+有脚本时，Claude 只需一次 Tool 调用：
+
+脚本编排（有脚本）：
+1. Bash(python calculate.py data.json) → 直接获得结果
+
+
+
+**脚本是“预编译”的知识**。它把人类专家的领域逻辑固化为代码，让 Claude 不需要在运行时“重新发明轮子”。
+
+
+
+#### 第三层关系：Tools 反哺 Skills
+
+`!command` 语法展示了反向关系：**Tools 的输出反哺 Skills 的上下文**
+
+```markdown
+---
+name: pr-summary
+description: Summarize changes in a pull request
+---
+
+## Context
+- PR diff: !`gh pr diff`           # Tool 输出 → 注入 Skill 上下文
+- Changed files: !`git diff --name-only`
+```
+
+这是 Tools 反哺 Skills 的预处理模式：Shell 命令在 Skill 加载之前执行，输出直接注入 SKILL.md 内容，Claude 收到的是**已经包含实时数据的知识**
+
+
+
+####  Skills × Tools 共生公式
+
+上述三层关系做个总结可以得到下面的 Skills × Tools 共生公式：
+
+![](./imgs/img80.png)
+
+
+
+### 总结
+
+**渐进式披露**是 Skills 的核心架构模式：按需加载，节省 tokens
+
+
+
+**三层架构是**：目录页（description）→ 章节（SKILL.md）→ 附录（引用文件）
+
+
+
+**SKILL.md 是路由器，**通过Quick Reference 表格用最少 token 完成路由判断。引用文件的“契约式”写法，即**契约式引用会**告诉 Claude 何时加载、加载什么、得到什么。这里有一个 **500 行法则** ，超过就该重构。把参考、模板、示例移到辅助文件。通过**脚本**来封装确定性逻辑，Claude 执行但不需要理解脚本中的内容
+
+
+
+如果与之前的子代理一起，那么有两种上下文管理策略，分别是**Skill的渐进式披露（按需加载）+ 子代理隔离（纯净上下文）**它们互相补充，解决不同的问题。两种上下文管理策略表的对比：
+
+![](./imgs/img81.png)
+
+**组合使用** ：一个子代理可以通过 `skills` 字段预加载 Skill，而该 Skill 内部仍然用渐进式披露组织内容。两种策略是互补的
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
