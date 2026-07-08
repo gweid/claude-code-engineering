@@ -1402,15 +1402,608 @@ description: Summarize changes in a pull request
 
 
 
+## Skill 与 SubAgent 的结合
+
+Skills 单独使用已经很强，但它真正的威力在于**与 SubAgent 组合**。把一个通用的 Agent 打造成领域专家
 
 
 
+### 两个组合方向：谁包含谁
+
+Skills 解决的是“怎么做”的问题，本质是知识注入。它让同一个 Agent 学会新的能力，就像给一个员工发了一本操作手册，员工还是那个人，只是掌握了更多方法与规范
+
+SubAgents 解决的是“谁来做”的问题，本质是任务委托。它创建一个独立的执行者去完成某件事，就像把任务交给另一位同事，对方拥有自己的上下文、职责边界和决策空间
+
+![](./imgs/img82.png)
 
 
 
+当把两者组合时，本质上只有两个组合方向：
+
+- 是 SubAgent 内部加载 Skills
+- 还是由主 Agent 通过 Skills 去编排和调用 SubAgents
 
 
 
+#### SubAgent 包含 Skill（`skills` 字段）
+
+这种方式，子代理通过 `skills` 字段给它预加载领域知识。**SubAgent 是老板，Skill 是工具书**
+
+比如一个 api 文档生成子代理：
+
+```markdown
+---
+name: api-doc-generator
+description: Generate API documentation by scanning Express route files.
+tools: [Read, Grep, Glob, Write, Bash]
+skills:
+  - api-generating           # ← 关键：预加载 Skill 作为领域知识
+---
+
+You are an API documentation specialist.
+
+## Your Mission
+Generate or update API documentation for Express.js routes.
+```
+
+
+
+这种情况下，Claude Code 的执行流程如下：
+
+```bash
+Claude 主对话: "用 api-doc-generator 为 src/ 生成 API 文档"
+
+主对话                              SubAgent (api-doc-generator)
+  │                                    │
+  ├─ 创建子代理 + 注入 Skill ──────────→ │
+  │                                    ├─ 上下文中已有：角色定义 + SKILL.md 全文
+  │                                    ├─ 按 SKILL.md 步骤执行任务
+  │                                    ├─ 使用 Skill 提供的脚本和模板
+  │                                    ├─ 生成文档
+  │  ←──────── 返回结果摘要 ──────────── │
+  ├─ 继续对话                          （子代理结束）
+```
+
+
+
+SubAgent 包含 Skill是最常见的情况，适用场景包括子代理需要特定领域的专业知识来完成任务，同一个 Skill 可以被不同角色的 SubAgent 复用，以及需要长期维护的专家型 Agent
+
+
+
+#### Skill 包含 SubAgent（`context: fork`）
+
+这种方式，Skill 自带任务指令，通过 `context: fork` 配置自动“派遣”一个子代理去执行。**Skill 是老板，SubAgent 是执行者**
+
+
+
+```markdown
+---
+name: deep-research
+description: Research a topic thoroughly in the codebase
+context: fork           # ← 关键：让 Skill 在独立子代理中执行
+agent: Explore          # ← 子代理类型（内置子代理或者自定义的子代理）
+---
+
+Research $ARGUMENTS thoroughly:
+
+1. Find relevant files using Glob and Grep
+2. Read and analyze the code
+3. Summarize findings with specific file references
+```
+
+
+
+此时的 Claude Code 执行流程如下：
+
+```bash
+用户: /deep-research authentication flow
+
+主对话                              子代理（Explore）
+  │                                    │
+  ├─ 创建隔离上下文 ───────────────────→ │
+  │                                    ├─ 收到任务："Research authentication flow..."
+  │                                    ├─ Glob/Grep 搜索相关文件
+  │                                    ├─ Read 分析代码
+  │                                    ├─ 生成结构化摘要
+  │  ←──── 返回结果摘要 ──────────────── │
+  ├─ 继续对话（上下文干净）            （子代理结束）
+```
+
+子代理**看不到** 之前的对话历史，因此 `SKILL.md` 的内容成为子代理的任务指。
+
+`agent` 字段决定子代理类型，有三个内置的值：`Explore`（只读探索）、`Plan`（规划）、`general-purpose`（通用，省略 `agent` 时默认使用)；以及使用自定义的 subagent
+
+
+
+这种应用方式的适用场景是：
+
+- 研究型任务（深度探索代码库，不污染主对话）
+- 重型生成（批量生成文档，中间过程不需要用户看到）
+- 以及安全隔离（Skill 的操作不应影响主对话状态）
+
+
+
+> 注意：context：fork只适合有明确指令的任务型 Ski。如果 Skill是参考型的内容 （如“API设计规范“），没有具体任务，子代理收到规范但不知道该做什么，会直接返回空结果
+
+
+
+两个方向的对比：
+
+![](./imgs/img83.png)
+
+
+
+### 构建 Skill：API 文档专家
+
+一位 API 文档专家，当写文档时，需要：
+
+- **识别技术栈** （Express? FastAPI? Spring?）→ PATTERNS.md
+- **遵循规范** （字段命名、格式要求）→ STANDARDS.md
+- **参考案例** （不确定时看例子）→ EXAMPLES.md
+- **使用模板** （保证一致性）→ templates/
+- **批量处理** （几十个端点不可能手写）→ scripts/
+
+
+
+一个生产级的 Skill 的完整架构应该包含这些组件：
+
+```markdown
+.claude/skills/api-generating/          # 标准 Skill 目录
+├── templates/
+│   ├── index.md                        # 模板：API 索引页
+│   ├── endpoint.md                     # 模板：端点文档
+│   └── openapi.yaml                    # 模板：OpenAPI 规范
+├── scripts/
+│   ├── detect_routes.py                # 脚本：路由检测
+│   └── validate_openapi.sh             # 脚本：规范验证
+├── SKILL.md                            # 入口：路由 + 核心逻辑
+├── PATTERNS.md                         # 知识：框架识别模式
+├── STANDARDS.md                        # 规范：文档编写标准
+└── EXAMPLES.md                         # 示例：输入输出案例
+```
+
+
+
+每个组件都有明确的职责：
+
+![](./imgs/img84.png)
+
+
+
+这些都是长期的经验积累之后内化的结果，一个生产级 Skill 所希望做到的，就是把这些专家经验形式化
+
+
+
+> 对应的示例在：03-Skills/05-api-generating
+
+
+
+### 三种组合模式
+
+两个组合方向是基础构件。实战中还衍生出三种组合模式
+
+
+
+#### 模式一：SubAgent 预加载 Skills
+
+一个子代理预加载一个或多个 Skill，用领域知识增强自己的能力。这是最常见的模式。
+
+```yaml
+---
+name: api-doc-generator
+skills:
+  - api-generating              # 预加载 API 文档生成知识
+---
+```
+
+
+
+配置了Skill的子代理好比一个经过培训的专业技师。**而同一个 Agent，注入不同的 Skill，就变成不同的专家。这就是组合的力量。**
+
+![](./imgs/img85.png)
+
+
+
+单独用Skill到组合使用的进化路线：
+
+> 具体代码在：03-Skills/06-agent-skill-combo
+
+```yaml
+api-generator                           agent-skill-combo
+─────────────                           ─────────────────
+Skill 独立运行                           Skill + SubAgent 组合
+
+SKILL.md（6 组件全展示）                  SKILL.md（精简为 3 组件）
+┌─────────────────────────────┐        ┌──────────────────────────────────────┐
+│ Quick Reference             │        │ 工作流程 — MANDATORY                  │
+│ Process: Step 1-4          │   →    │ Step 1: Route Discovery（脚本）       │
+│ Automation: 可选            │       │ Step 2: Route Analysis（分析）        │
+│ 6 个引用文件                │       │ Step 3: Documentation Generation    │
+└─────────────────────────────┘        └──────────────────────────────────────┘
+
+无 SubAgent 定义                         新增 SubAgent 定义
+                                       ┌──────────────────────────────────────┐
+                                       │ api-doc-generator.md                 │
+                                   │ skills: [api-generating]            │
+                                       │ "You are an API doc specialist."     │
+                                       └──────────────────────────────────────┘
+
+无测试目标                               新增 Express 测试路由
+                                       ┌─────────────────────────────────────┐
+                                       │ users.js  — 标准 CRUD（5 条路由）      │
+                                       │ orders.js — 含链式路由（5 条路由）      │
+                                       │ 共 10 条路由，验证覆盖率                │
+                                       └─────────────────────────────────────
+```
+
+
+
+agent-skill-combo 和 api-generator 有点不一样了，skill 从原来的 6 个组件精简为 3 个组件。因为 SubAgent 已经有了角色定义，Skill 只需提供工作流程和工具：
+
+```yaml
+api-generator（完整展示）            agent-skill-combo（实战精简）
+├── SKILL.md                       ├── SKILL.md          ← 强化工作流程
+├── PATTERNS.md                    ├── scripts/
+├── STANDARDS.md                   │   └── detect-routes.py
+├── EXAMPLES.md                    └── templates/
+├── templates/ (3 files)               └── api-doc.md
+└── scripts/ (2 files)
+```
+
+精简原则是参考型知识（PATTERNS、STANDARDS、EXAMPLES）在主对话场景中有用，但 SubAgent 场景下通常只需要执行流程。Skill 和 Sub-Agent 的职责划分：**Skill 负责 HOW，SubAgent 负责 WHO/WHAT**
+
+
+
+**然后是SubAgent 的角色定义。** SubAgent 的 `.md` 文件只定义角色和使命，具体的工作流程由 Skill 提供。其中 `skills: [api-generating]` 这一行，就是把"操作手册"交到 SubAgent 手里的那一刻
+
+```yaml
+---
+name: api-doc-generator
+description: Generate comprehensive API documentation by scanning Express route files.
+model: sonnet
+tools: [Read, Grep, Glob, Write, Bash]
+skills:
+  - api-generating           ← 预加载 Skill
+---
+```
+
+
+
+完整结构如下：
+
+```yaml
+agent-skill-combo/
+├── .claude/
+│   ├── agents/
+│   │   └── api-doc-generator.md     # SubAgent：角色 + 使命（WHO/WHAT）
+│   ├── skills/
+│   │   └── api-generating/
+│   │       ├── SKILL.md              # Skill：工作流程 + 规则（HOW）
+│   │       ├── scripts/
+│   │       │   └── detect-routes.py  # 路由检测脚本（处理链式路由）
+│   │       └── templates/
+│   │           └── api-doc.md        # 文档模板
+│   └── settings.local.json           # 权限预配置
+├── src/
+│   └── routes/
+│       ├── users.js                  # 标准 CRUD（5 条路由）
+│       └── orders.js                 # 含链式路由（5 条路由）
+├── docs/api/                         # 生成的文档（输出目录）
+└── README.md
+```
+
+
+
+#### 模式二：Skill + context: fork
+
+Skill 自带任务指令，Skill 包含 SubAgent，通过 `context: fork` 派一个子代理去执行。这种模式的**适用场景是一个独立完整的任务，不需要与主对话交互，执行完把结果送回来就行**
+
+```markdown
+---
+name: codebase-research
+description: Deep research into codebase topics
+context: fork # 关键点！
+agent: Explore
+---
+
+Research $ARGUMENTS thoroughly...
+```
+
+
+
+> 示例在：03-Skills/07-skill-fork-demo
+
+
+
+结构如下：
+
+```yaml
+skill-fork-demo/
+├── .claude/
+│   └── skills/
+│       └── code-health-check/
+│           └── SKILL.md              # context: fork + agent: general-purpose
+├── src/
+│   ├── app.js                        # 含硬编码密钥
+│   ├── routes/
+│   │   ├── products.js               # 含 SQL 注入、缺少 try/catch
+│   │   └── categories.js             # 含未使用函数、重复逻辑
+│   └── utils/
+│       └── db.js                     # 含 eval() 使用
+└── README.md
+```
+
+项目中，想做一次代码质量扫描，但不想让大量中间文件内容污染主对话。这正是 `context: fork` 的典型场景。**Skill 自己派一个子代理去做，做完把报告送回来**
+
+
+
+`SKILL.md` 设计如下：
+
+```markdown
+---
+name: code-health-check
+description: Perform a comprehensive code health check on a directory.
+context: fork                    # ← 关键：在隔离子代理中执行
+agent: general-purpose           # ← 子代理类型
+allowed-tools: [Read, Grep, Glob] # ← 只读，不修改代码
+---
+
+# Code Health Check
+
+Analyze the codebase at `$ARGUMENTS` and produce a structured health report.
+
+## Checks to Perform
+1. File Organization - 文件大小、目录结构
+2. Error Handling - try/catch、错误传播
+3. Security Basics - 硬编码密钥、eval()、SQL 注入
+4. Code Quality - 重复代码、未使用变量
+
+## Output Format
+Return a structured report:
+- Overall health score (A/B/C/D/F)
+- Issues found (categorized by severity: CRITICAL/WARNING/INFO)
+- Top 3 recommendations
+```
+
+
+
+项目的 `src/` 中故意埋了多个安全和质量问题：
+
+![](./imgs/img86.png)
+
+
+
+输入 prompt： /code-health-check src/ 后，执行流程如下：
+
+```bash
+/code-health-check src/
+  │
+  ├─ SKILL.md 被激活（context: fork）
+  │
+  ├─ 自动创建 general-purpose 子代理
+  │
+  ├─ 子代理在隔离上下文中：
+  │   ├─ Glob 扫描 src/ 下所有 .js 文件
+  │   ├─ Read 每个文件
+  │   ├─ Grep 搜索 eval(), hardcoded secrets 等模式
+  │   └─ 生成健康报告
+  │
+  └─ 返回报告到主对话（主对话上下文干净）
+```
+
+
+
+模式二的适用场景总结如下：
+
+![](./imgs/img87.png)
+
+
+
+#### 模式三：流水线中的 Skill 分工
+
+模式一的自然延伸：多个子代理各自预加载不同的 Skill，按阶段串联执行。每个阶段的输出作为下一阶段的输入。这种模式是和复杂的多阶段任务（之前子代理部分也介绍过类似的示例），但此处每个阶段需要通过 Skill 来配备不同的专业知识
+
+
+
+> 对应项目：03-Skills/08-skill-pipeline
+
+
+
+整体结构如下：
+
+```yaml
+skill-pipeline/
+├── CLAUDE.md                              ← 流水线编排指令
+├── .claude/
+│   ├── agents/
+│   │   ├── route-scanner.md               ← 阶段 1: 路由扫描专家 (haiku)
+│   │   ├── doc-writer.md                  ← 阶段 2: 文档编写专家 (sonnet)
+│   │   └── quality-checker.md             ← 阶段 3: 质量检查专家 (haiku)
+│   ├── skills/
+│   │   ├── route-scanning/
+│   │   │   ├── SKILL.md                   ← 扫描工作流程
+│   │   │   └── scripts/scan-routes.py     ← 路由扫描脚本
+│   │   ├── doc-writing/
+│   │   │   ├── SKILL.md                   ← 文档生成工作流程
+│   │   │   └── templates/endpoint-doc.md  ← 文档模板
+│   │   └── quality-checking/
+│   │       ├── SKILL.md                   ← 质量检查工作流程
+│   │       └── rules/doc-standards.md     ← 质量标准规则
+│   └── settings.local.json
+├── src/routes/
+│   ├── products.js                        ← 7 条路由（含链式路由）
+│   └── categories.js                      ← 5 条路由
+└── docs/                                  ← 生成的文档输出
+```
+
+
+
+一个完整的 API 文档流程可以拆分为三个阶段，每个阶段需要不同的专业能力：
+
+![](./imgs/img88.png)
+
+
+
+**阶段 1：Route Scanner。** 对应 Skill `route-scanning/SKILL.md`：包含扫描脚本 `scan-routes.py`，输出 JSON 格式的路由清单。
+
+> .claude/agents/route-scanner.md
+
+```markdown
+---
+name: route-scanner
+model: haiku                    # 轻量任务用 haiku
+tools: [Read, Grep, Glob, Bash]
+skills:
+  - route-scanning              # 预加载扫描知识
+---
+
+You are a route scanning specialist. You are Stage 1 of a documentation pipeline.
+```
+
+
+
+**阶段 2：Doc Writer。** 对应 Skill `doc-writing/SKILL.md`：包含文档模板 `endpoint-doc.md`，按模板生成标准化文档
+
+> .claude/agents/doc-writer.md
+
+```markdown
+---
+name: doc-writer
+description: Pipeline Stage 2 - Generate API documentation from a route manifest.
+model: sonnet
+tools: [Read, Write, Glob]
+skills:
+  - doc-writing
+---
+
+You are a documentation writing specialist. You are Stage 2 of a documentation pipeline.
+```
+
+
+
+**阶段 3：Quality Checker。** 对应 Skill `quality-checking/SKILL.md`：包含质量标准规则 `doc-standards.md`，逐项检查文档质量
+
+> .claude/agents/quality-checker.md
+
+```markdown
+---
+name: quality-checker
+description: Pipeline Stage 3 - Validate generated API documentation against quality standards.
+model: haiku
+tools: [Read, Grep, Glob]
+skills:
+  - quality-checking
+---
+
+You are a documentation quality specialist. You are Stage 3 of a documentation pipeline.
+```
+
+
+
+流水线的编排逻辑写在 `CLAUDE.md` 中：
+
+```markdown
+# API Documentation Pipeline
+
+This project uses a 3-stage pipeline to generate and validate API documentation.
+
+## Pipeline Stages
+
+When the user asks to run the documentation pipeline, execute these stages **in order**:
+
+### Stage 1: Route Scanning
+Use the `route-scanner` agent to scan the source directory.
+Pass the source directory path as the task.
+Collect the route manifest (JSON) from its output.
+
+### Stage 2: Documentation Generation
+Use the `doc-writer` agent to generate documentation.
+Pass the route manifest from Stage 1 as input context.
+Collect the documentation manifest from its output.
+
+### Stage 3: Quality Validation
+Use the `quality-checker` agent to validate the generated docs.
+Pass the documentation manifest from Stage 2 as input context.
+Report the quality verdict to the user.
+
+## Important
+
+- Each stage must complete before the next begins
+- Pass the output of each stage as input to the next
+- If Stage 3 reports NEEDS_REVISION, show the issues to the user
+```
+
+
+
+编排的关键在于每个阶段的输出是下一阶段的输入。Claude 主对话扮演“项目经理”角色，依次调用三个专家
+
+
+
+使用
+
+```bash
+# 运行完整流水线
+> 对 src/ 目录运行文档流水线
+
+
+# 或者分阶段手动运行
+> 用 route-scanner 扫描 src/ 目录的路由
+> 用 doc-writer 根据上面的路由清单生成文档
+> 用 quality-checker 验证 docs/ 目录下生成的文档
+```
+
+
+
+对于流水线模式的设计，需要注意下面几个要点：
+
+**要点一：定义清晰的阶段间接口**
+
+每个阶段的 SKILL.md 都明确写了输出格式。
+
+- 阶段 1 输出 JSON 路由清单
+- 阶段 2 输出文件列表 + 路由覆盖数
+- 阶段 3 输出 PASS/NEEDS_REVISION 报告
+
+这些就是阶段间的“接口合约”
+
+
+
+**要点二：每个 Skill 只关注一件事**
+
+- `route-scanning` 只扫描路由，不生成文档
+- `doc-writing` 只生成文档，不检查质量
+- `quality-checking` 只检查质量，不修改文档
+
+**单一职责** 让每个 Skill 更简洁、更可测试、更可复用。
+
+
+
+**要点三：编排逻辑集中管理**
+
+流水线的顺序、数据传递逻辑都放在 `CLAUDE.md` 中。如果要调整流程（比如跳过阶段 3），只需修改 `CLAUDE.md`，不需要动 Skill 或 SubAgent
+
+> 编排逻辑更推荐放在 workflows 下
+>
+>  .claude/workflows/
+>     feature-pipeline.js   # 推荐放这里：负责编排顺序、并行、重试、汇总
+
+
+
+#### 三种模式对照
+
+| 维度          | 模式一                        | 模式二                    | 模式三                             |
+| ------------- | ----------------------------- | ------------------------- | ---------------------------------- |
+| SubAgent 数量 | 1                             | 1（自动创建）             | N                                  |
+| Skill 数量    | 1 或多                        | 1                         | N                                  |
+| 谁是老板      | SubAgent                      | skill                     | CLAUDE.md 编排                     |
+| 触发方式      | 用户指定 SubAgent             | /command                  | 用户说“运行流水线”                 |
+| 上下文隔离    | 子代理隔离                    | context: fork 隔离        | 每阶段独立隔离                     |
+| 核心特征      | 单个 SubAgent + 一/多个 Skill | Skill 自动派子代理执行    | 多个 SubAgent 串联，各带不同 Skill |
+| 典型用途      | 需要专业知识的独立任务        | 一次性分析/研究，隔离任务 | 多阶段复杂流程任务                 |
+
+### 总结
+
+一句话：**SubAgent 定义“是谁、做什么”，Skill 定义“怎么做、用什么做”。两者各有所长，组合才完整**
 
 
 
