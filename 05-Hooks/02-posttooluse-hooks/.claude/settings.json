@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./hooks/auto-format.sh"
+          },
+          {
+            "type": "command",
+            "command": "./hooks/lint-check.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./hooks/audit-log.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
