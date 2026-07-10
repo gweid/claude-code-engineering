@@ -1,0 +1,7 @@
+{
+  "name": "stop-hooks-demo",
+  "version": "1.0.0",
+  "scripts": {
+    "test": "node src/math.test.js"
+  }
+}
