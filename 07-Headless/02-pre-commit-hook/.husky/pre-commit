@@ -1,0 +1,35 @@
+#!/bin/bash
+# Pre-commit hook: Claude Code 快速审查
+
+# 获取暂存的文件
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
+
+if [ -z "$STAGED_FILES" ]; then
+  exit 0
+fi
+
+echo "Running Claude Code review on staged files..."
+
+# 运行审查（只读工具，快速模式）
+RESULT=$(
+  claude -p "Quick review these staged files for obvious issues:
+$STAGED_FILES
+
+Focus on: syntax errors, security issues, obvious bugs.
+Reply with 'OK' if no issues, or list the problems." \
+    --output-format text \
+    --max-turns 3 \
+    --allowedTools Read,Grep
+)
+
+# 检查结果
+if echo "$RESULT" | grep -qi "OK"; then
+  echo "Claude review passed"
+  exit 0
+else
+  echo "Claude found issues:"
+  echo "$RESULT"
+  echo ""
+  echo "Commit blocked. Fix the issues or use --no-verify to skip."
+  exit 1
+fi
