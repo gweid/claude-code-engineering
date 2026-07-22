@@ -1,0 +1,17 @@
+{
+  "name": "team-toolkit",
+  "version": "1.0.0",
+  "description": "团队标准开发工具包：代码审查、测试、部署、安全扫描一体化",
+  "author": {
+    "name": "gweid"
+  },
+  "repository": "https://github.com/gweid/team-toolkit",
+  "license": "MIT",
+  "keywords": [
+    "devops",
+    "code-review",
+    "testing",
+    "deployment",
+    "security"
+  ]
+}
