@@ -36,8 +36,8 @@ Claude Code 是 Anthropic 官方推出的一个基于命令行的 AI 编程助�
 
 - [Claude Code 工程化](./05-工程化.md)
   - [Headless 模式与 CI/CD 集成](./05-工程化.md#Headless-模式与-CI/CD-集成)
-  - [Rules 规则系统深度剖析](./05-工程化.md#Rules-规则系统深度剖析)
-  - [通过Agent SDK 掌控 Claude Code](./05-工程化.md#Agent-SDK-基础)
+  - [Rules 规则系统](./05-工程化.md#rules-规则系统)
+  - [Agent SDK 基础](./05-工程化.md#Agent-SDK-基础)
   - [Agent SDK 高级应用](./05-工程化.md#Agent-SDK-高级应用)
   - [Plugins 插件打包与分发](./05-工程化.md#Plugins-插件打包与分发)
   - [Harness 工程架构](./05-工程化.md#Harness-工程架构)
